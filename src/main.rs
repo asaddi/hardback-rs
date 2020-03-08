@@ -29,6 +29,9 @@ extern crate anyhow;
 extern crate lazy_static;
 
 const ALPHA: &[u8] = b"ybndrfg8ejkmcpqxot1uwisza345h769";
+const PAD_CHAR: u8 = b'=';
+const RAW_BYTES_PER_CHUNK: usize = 5; // aka 40 bits aka least common multiple of 5 bits & 8 bits
+const ENCODED_BYTES_PER_CHUNK: usize = 8;
 
 lazy_static! {
     static ref DE_ALPHA: HashMap<u8, u8> = {
@@ -58,15 +61,32 @@ fn test_ljust() {
 
 fn raw_encode(s: &[u8]) -> Vec<u8> {
     let mut out = Vec::new();
-    for ins in s.chunks(5) {
-        let padded = ljust(ins, 5, 0u8);
+    for ins in s.chunks(RAW_BYTES_PER_CHUNK) {
+        let padded = ljust(ins, RAW_BYTES_PER_CHUNK, 0u8);
+
         let mut val: u64 = 0;
         for c in padded.iter().rev() {
             val <<= 8;
             val |= *c as u64;
         }
-        for _ in 0..8 {
-            out.push(ALPHA[(val & 0x1f) as usize]);
+
+        let pad_start = match ins.len() {
+            // Note that this is basically ceil(len * 8 / 5)
+            // d = data, x = padding
+            1 => 2, // ddxxxxxx
+            2 => 4, // ddddxxxx
+            3 => 5, // dddddxxx
+            4 => 7, // dddddddx
+            5 => 8, // dddddddd
+            _ => unreachable!()
+        };
+
+        for i in 0..8 {
+            if i < pad_start {
+                out.push(ALPHA[(val & 0x1f) as usize]);
+            } else {
+                out.push(PAD_CHAR);
+            }
             val >>= 5;
         }
     }
@@ -76,13 +96,63 @@ fn raw_encode(s: &[u8]) -> Vec<u8> {
 #[test]
 fn test_raw_encode() {
     let result = raw_encode(b"0123456789abcdefghijklmnopqrstuvwxyz");
-    assert_eq!(result, "ojcru3ogitpqdhr8buagg1icg53oswjpmd54gz7pomhrz3tqiu7q8hfx4dyyyyyy".as_bytes());
+    assert_eq!(result, "ojcru3ogitpqdhr8buagg1icg53oswjpmd54gz7pomhrz3tqiu7q8hfx4d======".as_bytes());
+}
+
+fn strip_padding(s: &[u8]) -> Result<(Vec<u8>, usize)> {
+    if s.len() < ENCODED_BYTES_PER_CHUNK {
+        // Nothing to do
+        return Ok((s.to_vec(), s.len()));
+    }
+
+    assert_eq!(s.len(), ENCODED_BYTES_PER_CHUNK);
+
+    let (raw_count, enc_count) = match s.iter().rposition(|&c| c != PAD_CHAR) {
+        // Inverse of pad_start in raw_encode.
+        // But note we only accept a few values.
+        Some(7) => (5, 8),
+        Some(6) => (4, 7),
+        Some(4) => (3, 5),
+        Some(3) => (2, 4),
+        Some(1) => (1, 2),
+        _ => bail!("invalid padding")
+    };
+
+    let mut out = Vec::new();
+    out.extend(&s[..enc_count]);
+
+    Ok((out, raw_count))
+}
+
+#[test]
+fn test_strip_padding() {
+    let result = strip_padding(b"yyyyyyyy").unwrap();
+    assert_eq!(result, (b"yyyyyyyy".to_vec(), 5));
+    let result = strip_padding(b"yyyyyyy=").unwrap();
+    assert_eq!(result, (b"yyyyyyy".to_vec(), 4));
+    let result = strip_padding(b"yyyyy===").unwrap();
+    assert_eq!(result, (b"yyyyy".to_vec(), 3));
+    let result = strip_padding(b"yyyy====").unwrap();
+    assert_eq!(result, (b"yyyy".to_vec(), 2));
+    let result = strip_padding(b"yy======").unwrap();
+    assert_eq!(result, (b"yy".to_vec(), 1));
+
+    strip_padding(b"yyy=====").unwrap_err(); // Invalid, expect error
+
+    // No padding
+    let result = strip_padding(b"yyyy").unwrap();
+    assert_eq!(result, (b"yyyy".to_vec(), 4));
 }
 
 fn raw_decode(s: &[u8]) -> Result<Vec<u8>> {
     let mut out = Vec::new();
-    for ins in s.chunks(8) {
-        let padded = ljust(ins, 8, ALPHA[0]);
+    for ins in s.chunks(ENCODED_BYTES_PER_CHUNK) {
+        // Strip pad characters, if any, keeping track of the number of raw bytes
+        let (stripped, raw_count) = strip_padding(ins)?;
+
+        // Then zero pad using the encoding for 0 from the alphabet
+        let padded = ljust(&stripped[..], ENCODED_BYTES_PER_CHUNK, ALPHA[0]);
+
         let mut val: u64 = 0;
         for c in padded.iter().rev() {
             let decoded = match DE_ALPHA.get(c) {
@@ -92,7 +162,8 @@ fn raw_decode(s: &[u8]) -> Result<Vec<u8>> {
             val <<= 5;
             val |= decoded as u64;
         }
-        for _ in 0..5 {
+
+        for _ in 0..raw_count {
             out.push((val & 0xff) as u8);
             val >>= 8;
         }
@@ -103,9 +174,8 @@ fn raw_decode(s: &[u8]) -> Result<Vec<u8>> {
 
 #[test]
 fn test_raw_decode() {
-    let result = raw_decode(b"ojcru3ogitpqdhr8buagg1icg53oswjpmd54gz7pomhrz3tqiu7q8hfx4dyyyyyy");
-    // Note result will be divisible by 8, padded with NULs
-    assert_eq!(result.unwrap(), "0123456789abcdefghijklmnopqrstuvwxyz\0\0\0\0".as_bytes());
+    let result = raw_decode(b"ojcru3ogitpqdhr8buagg1icg53oswjpmd54gz7pomhrz3tqiu7q8hfx4d======");
+    assert_eq!(result.unwrap(), "0123456789abcdefghijklmnopqrstuvwxyz".as_bytes());
 }
 
 // CRC-20 with poly 0x1c4047
@@ -141,7 +211,7 @@ const ENCODED_CRC_LEN: usize = 4; // 5 bits per encoded char * 4 = 20 bits
 fn encode_crc(crc: u32) -> Vec<u8> {
     let mut crc = crc;
     // Force little endian
-    let mut buf = Vec::with_capacity(4);
+    let mut buf = Vec::with_capacity(3);
     for _ in 0..3 { // NB Only encode 24 bits
         buf.push((crc & 0xff) as u8);
         crc >>= 8;
@@ -150,8 +220,8 @@ fn encode_crc(crc: u32) -> Vec<u8> {
 }
 
 fn encode(data: &[u8], width: usize) -> Vec<Vec<u8>> {
-    assert_eq!(width % 8, 0);
-    let raw_width = width * 5 / 8;
+    assert_eq!(width % ENCODED_BYTES_PER_CHUNK, 0);
+    let raw_width = width * RAW_BYTES_PER_CHUNK / ENCODED_BYTES_PER_CHUNK;
     let mut out = Vec::new();
     let mut crc = 0u32;
     for ins in data.chunks(raw_width) {
@@ -169,7 +239,7 @@ fn encode(data: &[u8], width: usize) -> Vec<Vec<u8>> {
 #[test]
 fn test_encode() {
     let result = &encode(b"0123456789abcdefghijklmnopqrstuvwxyz", 80)[0];
-    assert_eq!(*result, "ojcru3ogitpqdhr8buagg1icg53oswjpmd54gz7pomhrz3tqiu7q8hfx4dyyyyyyhkxj".as_bytes());
+    assert_eq!(*result, "ojcru3ogitpqdhr8buagg1icg53oswjpmd54gz7pomhrz3tqiu7q8hfx4d======hkxj".as_bytes());
 }
 
 fn decode_crc(data: &[u8]) -> u32 {
@@ -181,8 +251,7 @@ fn decode_crc(data: &[u8]) -> u32 {
     crc
 }
 
-fn decode(lines: Vec<Vec<u8>>, length: usize) -> Result<Vec<u8>> {
-    let mut length = length;
+fn decode(lines: Vec<Vec<u8>>) -> Result<Vec<u8>> {
     let mut line_number = 0;
     let mut crc = 0u32;
     let mut out = Vec::new();
@@ -190,13 +259,13 @@ fn decode(lines: Vec<Vec<u8>>, length: usize) -> Result<Vec<u8>> {
     for raw_line in lines {
         line_number += 1;
 
-        if raw_line.len() < (8 + ENCODED_CRC_LEN) {
+        if raw_line.len() < (ENCODED_BYTES_PER_CHUNK + ENCODED_CRC_LEN) {
             bail!("line too short at line {}", line_number);
         }
 
         let (line, enc_crc) = raw_line.split_at(raw_line.len() - ENCODED_CRC_LEN);
 
-        if line.len() % 8 != 0 {
+        if line.len() % ENCODED_BYTES_PER_CHUNK != 0 {
             bail!("invalid line length ({}) at line {}", raw_line.len(), line_number);
         }
 
@@ -205,25 +274,16 @@ fn decode(lines: Vec<Vec<u8>>, length: usize) -> Result<Vec<u8>> {
         let decoded_crc = raw_decode(enc_crc)
             .with_context(|| format!("decode error at line {}", line_number))?;
 
-        let decoded_line = if decoded_line.len() > length {
-            &decoded_line[..length]
-        } else {
-            &decoded_line[..]
-        };
-
-        assert!(length >= decoded_line.len()); // TODO error
-        length -= decoded_line.len();
-
-        crc = crc_update(decoded_line, crc);
+        crc = crc_update(&decoded_line[..], crc);
 
         let dec_crc = decode_crc(&decoded_crc[..]);
         if crc != dec_crc {
             bail!("CRC error at line {}", line_number);
         }
 
-        out.extend(decoded_line);
+        out.extend(&decoded_line);
 
-        if length == 0 { break };
+        if decoded_line.len() < RAW_BYTES_PER_CHUNK { break; }
     }
 
     Ok(out)
@@ -231,24 +291,9 @@ fn decode(lines: Vec<Vec<u8>>, length: usize) -> Result<Vec<u8>> {
 
 #[test]
 fn test_decode() {
-    let input = vec!["ojcru3ogitpqdhr8buagg1icg53oswjpmd54gz7pomhrz3tqiu7q8hfx4dyyyyyyhkxj".as_bytes().to_vec()];
-    let result = decode(input, 36).unwrap();
+    let input = vec!["ojcru3ogitpqdhr8buagg1icg53oswjpmd54gz7pomhrz3tqiu7q8hfx4d======hkxj".as_bytes().to_vec()];
+    let result = decode(input).unwrap();
     assert_eq!(result, "0123456789abcdefghijklmnopqrstuvwxyz".as_bytes());
-}
-
-#[derive(StructOpt, Debug)]
-struct Opt {
-
-    /// Decode input
-    #[structopt(short, long)]
-    decode: Option<usize>,
-
-    /// Input file
-    input: PathBuf,
-
-    /// Output file
-    output: PathBuf,
-
 }
 
 fn encode_main(input_filename: &Path, output_filename: &Path) -> Result<()> {
@@ -271,8 +316,8 @@ fn encode_main(input_filename: &Path, output_filename: &Path) -> Result<()> {
     let hash = hasher.result();
 
     writeln!(ofile, "# length: {}", length)?;
-    writeln!(ofile, "# alphabet: {}, CRC-20 poly: 0x1c4047, check: 0xa5448", String::from_utf8_lossy(ALPHA))?;
     writeln!(ofile, "# sha256: {:x}", hash)?;
+    writeln!(ofile, "# alphabet: {}, CRC-20 poly: 0x1c4047, check: 0xa5448", String::from_utf8_lossy(ALPHA))?;
 
     // Also write out to stderr
     eprintln!("# length: {}", length);
@@ -281,7 +326,7 @@ fn encode_main(input_filename: &Path, output_filename: &Path) -> Result<()> {
     Ok(())
 }
 
-fn decode_main(input_filename: &Path, output_filename: &Path, expected_length: usize) -> Result<()> {
+fn decode_main(input_filename: &Path, output_filename: &Path) -> Result<()> {
     let ifile = File::open(input_filename)?;
 
     let mut lines = Vec::new();
@@ -296,30 +341,41 @@ fn decode_main(input_filename: &Path, output_filename: &Path, expected_length: u
         lines.push(line);
     }
 
-    let decoded = decode(lines, expected_length)?;
-
-    if decoded.len() < expected_length {
-        bail!("input not long enough");
-    }
-
-    let decoded = &decoded[..expected_length];
+    let decoded = decode(lines)?;
 
     let mut hasher = Sha256::default();
-    hasher.input(decoded);
+    hasher.input(&decoded);
 
     let mut ofile = File::create(output_filename)?;
-    ofile.write_all(decoded)?;
+    ofile.write_all(&decoded[..])?;
 
+    eprintln!("# length: {}", decoded.len());
     eprintln!("# sha256: {:x}", hasher.result());
 
     Ok(())
 }
 
+#[derive(StructOpt, Debug)]
+struct Opt {
+
+    /// Decode input
+    #[structopt(short, long)]
+    decode: bool,
+
+    /// Input file
+    input: PathBuf,
+
+    /// Output file
+    output: PathBuf,
+
+}
+
 fn main() -> Result<()> {
     let opt = Opt::from_args();
 
-    match opt.decode {
-        Some(length) => decode_main(&opt.input, &opt.output, length),
-        None => encode_main(&opt.input, &opt.output)
+    if opt.decode {
+        decode_main(&opt.input, &opt.output)
+    } else {
+        encode_main(&opt.input, &opt.output)
     }
 }
