@@ -12,11 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::collections::HashMap;
-use std::io::prelude::*;
+use std::io::{prelude::*, self};
 use std::fs::File;
-use std::io::BufReader;
+use std::boxed::Box;
 
 use structopt::StructOpt;
 use anyhow::{Error, Result, Context};
@@ -296,16 +296,23 @@ fn test_decode() {
     assert_eq!(result, "0123456789abcdefghijklmnopqrstuvwxyz".as_bytes());
 }
 
-fn encode_main(input_filename: &Path, output_filename: &Path) -> Result<()> {
-    let mut ifile = File::open(input_filename)?;
+fn create_output(filename: &Option<PathBuf>) -> Result<Box<dyn Write>> {
+    match filename {
+        Some(filename) => Ok(Box::new(io::BufWriter::new(File::create(filename)?))),
+        None => Ok(Box::new(io::stdout()))
+    }
+}
 
+fn encode_main<R>(mut ifile: R, output: &Option<PathBuf>) -> Result<()>
+    where R: Read
+{
     // TODO Do this better
     let mut buf = Vec::new();
     let length = ifile.read_to_end(&mut buf)?;
 
     let encoded_lines = encode(&buf[..], 80);
 
-    let mut ofile = File::create(output_filename)?;
+    let mut ofile = create_output(output)?;
     for line in encoded_lines {
         ofile.write_all(&line[..])?;
         ofile.write_all(b"\n")?;
@@ -326,11 +333,11 @@ fn encode_main(input_filename: &Path, output_filename: &Path) -> Result<()> {
     Ok(())
 }
 
-fn decode_main(input_filename: &Path, output_filename: &Path) -> Result<()> {
-    let ifile = File::open(input_filename)?;
-
+fn decode_main<R>(ifile: R, output: &Option<PathBuf>) -> Result<()>
+    where R: BufRead
+{
     let mut lines = Vec::new();
-    for line in BufReader::new(ifile).lines() {
+    for line in ifile.lines() {
         let line = match line {
             Ok(line) => line.trim().as_bytes().to_vec(),
             Err(err) => return Err(Error::new(err))
@@ -346,7 +353,7 @@ fn decode_main(input_filename: &Path, output_filename: &Path) -> Result<()> {
     let mut hasher = Sha256::default();
     hasher.input(&decoded);
 
-    let mut ofile = File::create(output_filename)?;
+    let mut ofile = create_output(output)?;
     ofile.write_all(&decoded[..])?;
 
     eprintln!("# length: {}", decoded.len());
@@ -362,20 +369,26 @@ struct Opt {
     #[structopt(short, long)]
     decode: bool,
 
-    /// Input file
-    input: PathBuf,
+    /// Output file. If not specified, will write to stdout.
+    #[structopt(short, long)]
+    output: Option<PathBuf>,
 
-    /// Output file
-    output: PathBuf,
+    /// Input file. If not specified, will read from stdin.
+    input: Option<PathBuf>,
 
 }
 
 fn main() -> Result<()> {
     let opt = Opt::from_args();
 
+    let ifile: Box<dyn BufRead> = match opt.input {
+        Some(filename) => Box::new(io::BufReader::new(File::open(filename)?)),
+        None => Box::new(io::BufReader::new(io::stdin()))
+    };
+
     if opt.decode {
-        decode_main(&opt.input, &opt.output)
+        decode_main(ifile, &opt.output)
     } else {
-        encode_main(&opt.input, &opt.output)
+        encode_main(ifile, &opt.output)
     }
 }
