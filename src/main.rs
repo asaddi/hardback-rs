@@ -43,6 +43,7 @@ lazy_static! {
     };
 }
 
+// Left justify aka right pad
 fn ljust(s: &[u8], size: usize, fill: u8) -> Vec<u8> {
     if s.len() >= size {
         s.to_vec()
@@ -64,6 +65,7 @@ fn raw_encode(s: &[u8]) -> Vec<u8> {
     for ins in s.chunks(RAW_BYTES_PER_CHUNK) {
         let padded = ljust(ins, RAW_BYTES_PER_CHUNK, 0u8);
 
+        // Basically little endian interpretation of 8 data bytes (LSB at padded[0])
         let mut val: u64 = 0;
         for c in padded.iter().rev() {
             val <<= 8;
@@ -81,15 +83,15 @@ fn raw_encode(s: &[u8]) -> Vec<u8> {
             _ => unreachable!()
         };
 
-        for i in 0..8 {
-            if i < pad_start {
-                out.push(ALPHA[(val & 0x1f) as usize]);
-            } else {
-                out.push(PAD_CHAR);
-            }
+        for _ in 0..pad_start {
+            out.push(ALPHA[(val & 0x1f) as usize]);
             val >>= 5;
         }
+        for _ in pad_start..8 {
+            out.push(PAD_CHAR);
+        }
     }
+
     out
 }
 
@@ -101,14 +103,28 @@ fn test_raw_encode() {
 
 fn strip_padding(s: &[u8]) -> Result<(Vec<u8>, usize)> {
     if s.len() < ENCODED_BYTES_PER_CHUNK {
-        // Nothing to do
-        return Ok((s.to_vec(), s.len()));
+        // Nothing to do, return as-is (after determining appropriate raw count)
+        let raw_count = match s.len() {
+            // Note these are ceil(len * 5 / 8)
+            // So lengths like 4 encoded will yield 3 bytes/24 bits (20 bits in actuality)
+            7 => 5,
+            6 => 4,
+            5 => 4,
+            4 => 3,
+            3 => 2,
+            2 => 2,
+            1 => 1,
+            _ => bail!("invalid chunk length")
+        };
+        return Ok((s.to_vec(), raw_count));
     }
 
     assert_eq!(s.len(), ENCODED_BYTES_PER_CHUNK);
 
+    // We really only expect padding on the final chunk and we can't return partial bytes.
+    // So lengths will be shorter than above (and more closely mirror raw_encode).
     let (raw_count, enc_count) = match s.iter().rposition(|&c| c != PAD_CHAR) {
-        // Inverse of pad_start in raw_encode.
+        // Basically the inverse of pad_start in raw_encode.
         // But note we only accept a few values.
         Some(7) => (5, 8),
         Some(6) => (4, 7),
@@ -126,22 +142,60 @@ fn strip_padding(s: &[u8]) -> Result<(Vec<u8>, usize)> {
 
 #[test]
 fn test_strip_padding() {
+    // Max chunk size, padded, valid lengths
     let result = strip_padding(b"yyyyyyyy").unwrap();
     assert_eq!(result, (b"yyyyyyyy".to_vec(), 5));
+
     let result = strip_padding(b"yyyyyyy=").unwrap();
     assert_eq!(result, (b"yyyyyyy".to_vec(), 4));
+
     let result = strip_padding(b"yyyyy===").unwrap();
     assert_eq!(result, (b"yyyyy".to_vec(), 3));
+
     let result = strip_padding(b"yyyy====").unwrap();
     assert_eq!(result, (b"yyyy".to_vec(), 2));
+
     let result = strip_padding(b"yy======").unwrap();
     assert_eq!(result, (b"yy".to_vec(), 1));
 
-    strip_padding(b"yyy=====").unwrap_err(); // Invalid, expect error
+    // Max chunk size, invalid lengths (expect error)
+    strip_padding(b"yyyyyy==").unwrap_err();
+    strip_padding(b"yyy=====").unwrap_err();
+    strip_padding(b"y=======").unwrap_err();
 
-    // No padding
-    let result = strip_padding(b"yyyy").unwrap();
-    assert_eq!(result, (b"yyyy".to_vec(), 4));
+    fn raw_size(s: &[u8]) -> usize {
+        let length = s.len() as f32 * 5.0 / 8.0;
+        length.ceil() as usize
+    }
+
+    // Less than max chunk size (excess bits spill over to an additional decoded byte)
+    let input = b"yyyyyyy";
+    let result = strip_padding(input).unwrap();
+    assert_eq!(result, (input.to_vec(), raw_size(input)));
+
+    let input = b"yyyyyy";
+    let result = strip_padding(input).unwrap();
+    assert_eq!(result, (input.to_vec(), raw_size(input)));
+
+    let input = b"yyyyy";
+    let result = strip_padding(input).unwrap();
+    assert_eq!(result, (input.to_vec(), raw_size(input)));
+
+    let input = b"yyyy";
+    let result = strip_padding(input).unwrap();
+    assert_eq!(result, (input.to_vec(), raw_size(input)));
+
+    let input = b"yyy";
+    let result = strip_padding(input).unwrap();
+    assert_eq!(result, (input.to_vec(), raw_size(input)));
+
+    let input = b"yy";
+    let result = strip_padding(input).unwrap();
+    assert_eq!(result, (input.to_vec(), raw_size(input)));
+
+    let input = b"y";
+    let result = strip_padding(input).unwrap();
+    assert_eq!(result, (input.to_vec(), raw_size(input)));
 }
 
 fn raw_decode(s: &[u8]) -> Result<Vec<u8>> {
@@ -221,9 +275,11 @@ fn encode_crc(crc: u32) -> Vec<u8> {
 
 fn encode(data: &[u8], width: usize) -> Vec<Vec<u8>> {
     assert_eq!(width % ENCODED_BYTES_PER_CHUNK, 0);
+
     let raw_width = width * RAW_BYTES_PER_CHUNK / ENCODED_BYTES_PER_CHUNK;
     let mut out = Vec::new();
     let mut crc = 0u32;
+
     for ins in data.chunks(raw_width) {
         crc = crc_update(ins, crc);
 
@@ -233,6 +289,7 @@ fn encode(data: &[u8], width: usize) -> Vec<Vec<u8>> {
 
         out.push(line);
     }
+
     out
 }
 
