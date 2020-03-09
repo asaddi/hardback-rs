@@ -353,6 +353,24 @@ fn test_decode() {
     assert_eq!(result, "0123456789abcdefghijklmnopqrstuvwxyz".as_bytes());
 }
 
+#[test]
+fn test_encode_decode() {
+    let text = b"Hello there.\nGeneral Kenobi..\nYou are a bold one.\n";
+    assert_eq!(text.len(), 50); // Otherwise our assumptions break
+
+    for text_len in 0..text.len() {
+        let raw_text = &text[..text_len+1];
+
+        let encoded = encode(raw_text, 80); // width is 50 * 8 / 5, so the text at full length will be encoded in 80 bytes
+        assert_eq!(encoded.len(), 1);
+
+        // println!("{} -> {}", String::from_utf8_lossy(raw_text), String::from_utf8_lossy(&encoded[0][..]));
+
+        let decoded = decode(encoded).unwrap();
+        assert_eq!(decoded, raw_text);
+    }
+}
+
 fn create_output(filename: &Option<PathBuf>) -> Result<Box<dyn Write>> {
     match filename {
         Some(filename) => Ok(Box::new(io::BufWriter::new(File::create(filename)?))),
