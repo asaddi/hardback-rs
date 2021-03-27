@@ -7,27 +7,24 @@ use std::boxed::Box;
 use structopt::StructOpt;
 use anyhow::{Error, Result, Context};
 use sha2::{Sha256, Digest};
+use static_init::{dynamic};
 
 #[macro_use]
 extern crate anyhow;
-
-#[macro_use]
-extern crate lazy_static;
 
 const ALPHA: &[u8] = b"ybndrfg8ejkmcpqxot1uwisza345h769";
 const PAD_CHAR: u8 = b'=';
 const RAW_BYTES_PER_CHUNK: usize = 5; // aka 40 bits aka least common multiple of 5 bits & 8 bits
 const ENCODED_BYTES_PER_CHUNK: usize = 8;
 
-lazy_static! {
-    static ref DE_ALPHA: HashMap<u8, u8> = {
-        let mut decode_table = HashMap::new();
-        for (index, c) in ALPHA.iter().enumerate() {
-            decode_table.insert(*c, index as u8);
-        }
-        decode_table
-    };
-}
+#[dynamic]
+static DE_ALPHA: HashMap<u8, u8> = {
+    let mut decode_table = HashMap::new();
+    for (index, c) in ALPHA.iter().enumerate() {
+        decode_table.insert(*c, index as u8);
+    }
+    decode_table
+};
 
 // Left justify aka right pad
 fn ljust(s: &[u8], size: usize, fill: u8) -> Vec<u8> {

@@ -10,5 +10,5 @@ license = "MIT OR Apache-2.0"
 [dependencies]
 structopt = "0.3"
 anyhow = "1.0"
-lazy_static = "1.4"
+static_init = "0.5.2"
 sha2 = "0.8"
