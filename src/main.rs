@@ -4,7 +4,7 @@ use std::io::{prelude::*, self};
 use std::fs::File;
 use std::boxed::Box;
 
-use structopt::StructOpt;
+use clap::Parser;
 use anyhow::{Error, Result, Context};
 use sha2::{Sha256, Digest};
 use static_init::{dynamic};
@@ -309,7 +309,7 @@ fn decode(lines: Vec<Vec<u8>>) -> Result<Vec<u8>> {
             bail!("invalid line length ({}) at line {}", raw_line.len(), line_number);
         }
 
-        let decoded_line = raw_decode(&line[..])
+        let decoded_line = raw_decode(line)
             .with_context(|| format!("decode error at line {}", line_number))?;
         let decoded_crc = raw_decode(enc_crc)
             .with_context(|| format!("decode error at line {}", line_number))?;
@@ -420,15 +420,15 @@ fn decode_main<R>(ifile: R, output: &Option<PathBuf>) -> Result<()>
     Ok(())
 }
 
-#[derive(StructOpt, Debug)]
+#[derive(Parser, Debug)]
 struct Opt {
 
     /// Decode input
-    #[structopt(short, long)]
+    #[clap(short, long)]
     decode: bool,
 
     /// Output file. If not specified, will write to stdout.
-    #[structopt(short, long)]
+    #[clap(short, long)]
     output: Option<PathBuf>,
 
     /// Input file. If not specified, will read from stdin.
@@ -437,7 +437,7 @@ struct Opt {
 }
 
 fn main() -> Result<()> {
-    let opt = Opt::from_args();
+    let opt = Opt::parse();
 
     let ifile: Box<dyn BufRead> = match opt.input {
         Some(filename) => Box::new(io::BufReader::new(File::open(filename)?)),
