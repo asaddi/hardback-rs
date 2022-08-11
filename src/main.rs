@@ -7,7 +7,7 @@ use std::boxed::Box;
 use clap::Parser;
 use anyhow::{Error, Result, Context};
 use sha2::{Sha256, Digest};
-use static_init::{dynamic};
+use once_cell::sync::Lazy;
 
 #[macro_use]
 extern crate anyhow;
@@ -17,14 +17,13 @@ const PAD_CHAR: u8 = b'=';
 const RAW_BYTES_PER_CHUNK: usize = 5; // aka 40 bits aka least common multiple of 5 bits & 8 bits
 const ENCODED_BYTES_PER_CHUNK: usize = 8;
 
-#[dynamic]
-static DE_ALPHA: HashMap<u8, u8> = {
+static DE_ALPHA: Lazy<HashMap<u8, u8>> = Lazy::new(|| {
     let mut decode_table = HashMap::new();
     for (index, c) in ALPHA.iter().enumerate() {
         decode_table.insert(*c, index as u8);
     }
     decode_table
-};
+});
 
 // Left justify aka right pad
 fn ljust(s: &[u8], size: usize, fill: u8) -> Vec<u8> {
@@ -70,9 +69,8 @@ fn raw_encode(s: &[u8]) -> Vec<u8> {
             out.push(ALPHA[(val & 0x1f) as usize]);
             val >>= 5;
         }
-        for _ in pad_start..8 {
-            out.push(PAD_CHAR);
-        }
+        // new_len = basically ceil(len / 8) * 8
+        out.resize(((out.len() + ENCODED_BYTES_PER_CHUNK - 1) / ENCODED_BYTES_PER_CHUNK) * ENCODED_BYTES_PER_CHUNK, PAD_CHAR);
     }
 
     out
