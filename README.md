@@ -23,7 +23,7 @@ letters, omitting '0', 'l', 'v', and '2'.
 
 Each line is protected with a CRC-20 run over the current line and all
 previous lines. The CRC is encoded as 4 base-32 characters at the end of
-the line. The SHA-256 hashe of the overall file are also part of
+the line. The SHA-256 hash of the overall file are also part of
 the output, though it is not used by the program when decoding.
 
 Finally, the only round-trip testing I've done is as follows:
