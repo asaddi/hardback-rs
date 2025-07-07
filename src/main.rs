@@ -375,8 +375,8 @@ fn encode_main<R>(mut ifile: R, output: &Option<PathBuf>) -> Result<()>
     }
 
     let mut hasher = Sha256::default();
-    hasher.input(&buf[..]);
-    let hash = hasher.result();
+    hasher.update(&buf[..]);
+    let hash = hasher.finalize();
 
     writeln!(ofile, "# length: {length}")?;
     writeln!(ofile, "# sha256: {hash:x}")?;
@@ -407,13 +407,13 @@ fn decode_main<R>(ifile: R, output: &Option<PathBuf>) -> Result<()>
     let decoded = decode(lines)?;
 
     let mut hasher = Sha256::default();
-    hasher.input(&decoded);
+    hasher.update(&decoded);
 
     let mut ofile = create_output(output)?;
     ofile.write_all(&decoded[..])?;
 
     eprintln!("# length: {}", decoded.len());
-    eprintln!("# sha256: {:x}", hasher.result());
+    eprintln!("# sha256: {:x}", hasher.finalize());
 
     Ok(())
 }
