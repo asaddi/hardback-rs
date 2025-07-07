@@ -70,7 +70,7 @@ fn raw_encode(s: &[u8]) -> Vec<u8> {
             val >>= 5;
         }
         // new_len = basically ceil(len / 8) * 8
-        out.resize(((out.len() + ENCODED_BYTES_PER_CHUNK - 1) / ENCODED_BYTES_PER_CHUNK) * ENCODED_BYTES_PER_CHUNK, PAD_CHAR);
+        out.resize(out.len().div_ceil(ENCODED_BYTES_PER_CHUNK) * ENCODED_BYTES_PER_CHUNK, PAD_CHAR);
     }
 
     out
@@ -308,9 +308,9 @@ fn decode(lines: Vec<Vec<u8>>) -> Result<Vec<u8>> {
         }
 
         let decoded_line = raw_decode(line)
-            .with_context(|| format!("decode error at line {}", line_number))?;
+            .with_context(|| format!("decode error at line {line_number}"))?;
         let decoded_crc = raw_decode(enc_crc)
-            .with_context(|| format!("decode error at line {}", line_number))?;
+            .with_context(|| format!("decode error at line {line_number}"))?;
 
         crc = crc_update(&decoded_line[..], crc);
 
@@ -378,13 +378,13 @@ fn encode_main<R>(mut ifile: R, output: &Option<PathBuf>) -> Result<()>
     hasher.input(&buf[..]);
     let hash = hasher.result();
 
-    writeln!(ofile, "# length: {}", length)?;
-    writeln!(ofile, "# sha256: {:x}", hash)?;
+    writeln!(ofile, "# length: {length}")?;
+    writeln!(ofile, "# sha256: {hash:x}")?;
     writeln!(ofile, "# alphabet: {}, CRC-20 poly: 0x1c4047, check: 0xa5448", String::from_utf8_lossy(ALPHA))?;
 
     // Also write out to stderr
-    eprintln!("# length: {}", length);
-    eprintln!("# sha256: {:x}", hash);
+    eprintln!("# length: {length}");
+    eprintln!("# sha256: {hash:x}");
 
     Ok(())
 }
