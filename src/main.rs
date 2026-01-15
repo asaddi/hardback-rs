@@ -1,14 +1,14 @@
+use std::boxed::Box;
+use std::collections::HashMap;
+use std::fs::File;
+use std::io::{self, prelude::*};
 use std::iter::FromIterator;
 use std::path::PathBuf;
-use std::collections::HashMap;
-use std::io::{prelude::*, self};
-use std::fs::File;
-use std::boxed::Box;
 
+use anyhow::{Context, Error, Result};
 use clap::Parser;
-use anyhow::{Error, Result, Context};
-use sha2::{Sha256, Digest};
 use once_cell::sync::Lazy;
+use sha2::{Digest, Sha256};
 
 #[macro_use]
 extern crate anyhow;
@@ -30,8 +30,7 @@ static DE_ALPHA: Lazy<HashMap<u8, u8>> = Lazy::new(|| {
 fn ljust(s: &[u8], size: usize, fill: u8) -> Vec<u8> {
     if s.len() >= size {
         s.to_vec()
-    }
-    else {
+    } else {
         let padding = [fill].repeat(size - s.len());
         [s.to_vec(), padding].concat()
     }
@@ -63,7 +62,7 @@ fn raw_encode(s: &[u8]) -> Vec<u8> {
             3 => 5, // dddddxxx
             4 => 7, // dddddddx
             5 => 8, // dddddddd
-            _ => unreachable!()
+            _ => unreachable!(),
         };
 
         for _ in 0..pad_start {
@@ -71,7 +70,10 @@ fn raw_encode(s: &[u8]) -> Vec<u8> {
             val >>= 5;
         }
         // new_len = basically ceil(len / 8) * 8
-        out.resize(out.len().div_ceil(ENCODED_BYTES_PER_CHUNK) * ENCODED_BYTES_PER_CHUNK, PAD_CHAR);
+        out.resize(
+            out.len().div_ceil(ENCODED_BYTES_PER_CHUNK) * ENCODED_BYTES_PER_CHUNK,
+            PAD_CHAR,
+        );
     }
 
     out
@@ -80,7 +82,10 @@ fn raw_encode(s: &[u8]) -> Vec<u8> {
 #[test]
 fn test_raw_encode() {
     let result = raw_encode(b"0123456789abcdefghijklmnopqrstuvwxyz");
-    assert_eq!(result, "ojcru3ogitpqdhr8buagg1icg53oswjpmd54gz7pomhrz3tqiu7q8hfx4d======".as_bytes());
+    assert_eq!(
+        result,
+        "ojcru3ogitpqdhr8buagg1icg53oswjpmd54gz7pomhrz3tqiu7q8hfx4d======".as_bytes()
+    );
 }
 
 fn strip_padding(s: &[u8]) -> Result<(Vec<u8>, usize)> {
@@ -96,7 +101,7 @@ fn strip_padding(s: &[u8]) -> Result<(Vec<u8>, usize)> {
             3 => 2,
             2 => 2,
             1 => 1,
-            _ => bail!("invalid chunk length")
+            _ => bail!("invalid chunk length"),
         };
         return Ok((s.to_vec(), raw_count));
     }
@@ -113,7 +118,7 @@ fn strip_padding(s: &[u8]) -> Result<(Vec<u8>, usize)> {
         Some(4) => (3, 5),
         Some(3) => (2, 4),
         Some(1) => (1, 2),
-        _ => bail!("invalid padding")
+        _ => bail!("invalid padding"),
     };
 
     let mut out = Vec::new();
@@ -193,7 +198,7 @@ fn raw_decode(s: &[u8]) -> Result<Vec<u8>> {
         for c in padded.iter().rev() {
             let decoded = match DE_ALPHA.get(c) {
                 Some(d) => *d,
-                None => bail!("invalid character '{}'", String::from_utf8_lossy(&[*c])) // Wew!
+                None => bail!("invalid character '{}'", String::from_utf8_lossy(&[*c])), // Wew!
             };
             val <<= 5;
             val |= decoded as u64;
@@ -211,7 +216,10 @@ fn raw_decode(s: &[u8]) -> Result<Vec<u8>> {
 #[test]
 fn test_raw_decode() {
     let result = raw_decode(b"ojcru3ogitpqdhr8buagg1icg53oswjpmd54gz7pomhrz3tqiu7q8hfx4d======");
-    assert_eq!(result.unwrap(), "0123456789abcdefghijklmnopqrstuvwxyz".as_bytes());
+    assert_eq!(
+        result.unwrap(),
+        "0123456789abcdefghijklmnopqrstuvwxyz".as_bytes()
+    );
 }
 
 // CRC-20 with poly 0x1c4047
@@ -221,7 +229,11 @@ fn test_raw_decode() {
 fn crc_update(data: &[u8], crc: u32) -> u32 {
     let mut crc = crc;
     for c in data {
-        for i in [0x80u8, 0x40u8, 0x20u8, 0x10u8, 0x08u8, 0x04u8, 0x02u8, 0x01u8].iter() {
+        for i in [
+            0x80u8, 0x40u8, 0x20u8, 0x10u8, 0x08u8, 0x04u8, 0x02u8, 0x01u8,
+        ]
+        .iter()
+        {
             let mut bit = (crc & 0x80000) != 0; // The bit about to be shifted out
             if (c & i) != 0 {
                 bit = !bit;
@@ -248,7 +260,8 @@ fn encode_crc(crc: u32) -> Vec<u8> {
     let mut crc = crc;
     // Force little endian
     let mut buf = Vec::with_capacity(3);
-    for _ in 0..3 { // NB Only encode 24 bits
+    for _ in 0..3 {
+        // NB Only encode 24 bits
         buf.push((crc & 0xff) as u8);
         crc >>= 8;
     }
@@ -278,7 +291,10 @@ fn encode(data: &[u8], width: usize) -> Vec<Vec<u8>> {
 #[test]
 fn test_encode() {
     let result = &encode(b"0123456789abcdefghijklmnopqrstuvwxyz", 80)[0];
-    assert_eq!(*result, "ojcru3ogitpqdhr8buagg1icg53oswjpmd54gz7pomhrz3tqiu7q8hfx4d======hkxj".as_bytes());
+    assert_eq!(
+        *result,
+        "ojcru3ogitpqdhr8buagg1icg53oswjpmd54gz7pomhrz3tqiu7q8hfx4d======hkxj".as_bytes()
+    );
 }
 
 fn strip_ascii_whitespace(data: &[u8]) -> Vec<u8> {
@@ -320,13 +336,17 @@ fn decode(lines: Vec<Vec<u8>>) -> Result<Vec<u8>> {
         if line.len() % ENCODED_BYTES_PER_CHUNK != 0 {
             // FIXME Should we report the real line length instead of the
             // stripped length?
-            bail!("invalid line length ({}) at line {}", stripped_line.len(), line_number);
+            bail!(
+                "invalid line length ({}) at line {}",
+                stripped_line.len(),
+                line_number
+            );
         }
 
-        let decoded_line = raw_decode(line)
-            .with_context(|| format!("decode error at line {line_number}"))?;
-        let decoded_crc = raw_decode(enc_crc)
-            .with_context(|| format!("decode error at line {line_number}"))?;
+        let decoded_line =
+            raw_decode(line).with_context(|| format!("decode error at line {line_number}"))?;
+        let decoded_crc =
+            raw_decode(enc_crc).with_context(|| format!("decode error at line {line_number}"))?;
 
         crc = crc_update(&decoded_line[..], crc);
 
@@ -337,7 +357,9 @@ fn decode(lines: Vec<Vec<u8>>) -> Result<Vec<u8>> {
 
         out.extend(&decoded_line);
 
-        if decoded_line.len() < RAW_BYTES_PER_CHUNK { break; }
+        if decoded_line.len() < RAW_BYTES_PER_CHUNK {
+            break;
+        }
     }
 
     Ok(out)
@@ -345,14 +367,22 @@ fn decode(lines: Vec<Vec<u8>>) -> Result<Vec<u8>> {
 
 #[test]
 fn test_decode() {
-    let input = vec!["ojcru3ogitpqdhr8buagg1icg53oswjpmd54gz7pomhrz3tqiu7q8hfx4d======hkxj".as_bytes().to_vec()];
+    let input = vec![
+        "ojcru3ogitpqdhr8buagg1icg53oswjpmd54gz7pomhrz3tqiu7q8hfx4d======hkxj"
+            .as_bytes()
+            .to_vec(),
+    ];
     let result = decode(input).unwrap();
     assert_eq!(result, "0123456789abcdefghijklmnopqrstuvwxyz".as_bytes());
 }
 
 #[test]
 fn test_decode_whitespace() {
-    let input = vec!["ojcru3og itpqdhr8 buagg1ic g53oswjp md54gz7p omhrz3tq iu7q8hfx 4d======hkxj".as_bytes().to_vec()];
+    let input = vec![
+        "ojcru3og itpqdhr8 buagg1ic g53oswjp md54gz7p omhrz3tq iu7q8hfx 4d======hkxj"
+            .as_bytes()
+            .to_vec(),
+    ];
     let result = decode(input).unwrap();
     assert_eq!(result, "0123456789abcdefghijklmnopqrstuvwxyz".as_bytes());
 }
@@ -363,7 +393,7 @@ fn test_encode_decode() {
     assert_eq!(text.len(), 50); // Otherwise our assumptions break
 
     for text_len in 0..text.len() {
-        let raw_text = &text[..text_len+1];
+        let raw_text = &text[..text_len + 1];
 
         let encoded = encode(raw_text, 80); // width is 50 * 8 / 5, so the text at full length will be encoded in 80 bytes
         assert_eq!(encoded.len(), 1);
@@ -378,12 +408,13 @@ fn test_encode_decode() {
 fn create_output(filename: &Option<PathBuf>) -> Result<Box<dyn Write>> {
     match filename {
         Some(filename) => Ok(Box::new(io::BufWriter::new(File::create(filename)?))),
-        None => Ok(Box::new(io::stdout()))
+        None => Ok(Box::new(io::stdout())),
     }
 }
 
 fn encode_main<R>(mut ifile: R, output: &Option<PathBuf>) -> Result<()>
-    where R: Read
+where
+    R: Read,
 {
     // TODO Do this better
     let mut buf = Vec::new();
@@ -403,7 +434,11 @@ fn encode_main<R>(mut ifile: R, output: &Option<PathBuf>) -> Result<()>
 
     writeln!(ofile, "# length: {length}")?;
     writeln!(ofile, "# sha256: {hash:x}")?;
-    writeln!(ofile, "# alphabet: {}, CRC-20 poly: 0x1c4047, check: 0xa5448", String::from_utf8_lossy(ALPHA))?;
+    writeln!(
+        ofile,
+        "# alphabet: {}, CRC-20 poly: 0x1c4047, check: 0xa5448",
+        String::from_utf8_lossy(ALPHA)
+    )?;
 
     // Also write out to stderr
     eprintln!("# length: {length}");
@@ -413,16 +448,19 @@ fn encode_main<R>(mut ifile: R, output: &Option<PathBuf>) -> Result<()>
 }
 
 fn decode_main<R>(ifile: R, output: &Option<PathBuf>) -> Result<()>
-    where R: BufRead
+where
+    R: BufRead,
 {
     let mut lines = Vec::new();
     for line in ifile.lines() {
         let line = match line {
             Ok(line) => line.trim().as_bytes().to_vec(),
-            Err(err) => return Err(Error::new(err))
+            Err(err) => return Err(Error::new(err)),
         };
 
-        if line.is_empty() || line.starts_with(b"#") { continue; }
+        if line.is_empty() || line.starts_with(b"#") {
+            continue;
+        }
 
         lines.push(line);
     }
@@ -443,7 +481,6 @@ fn decode_main<R>(ifile: R, output: &Option<PathBuf>) -> Result<()>
 
 #[derive(Parser, Debug)]
 struct Opt {
-
     /// Decode input
     #[clap(short, long)]
     decode: bool,
@@ -454,7 +491,6 @@ struct Opt {
 
     /// Input file. If not specified, will read from stdin.
     input: Option<PathBuf>,
-
 }
 
 fn main() -> Result<()> {
@@ -462,7 +498,7 @@ fn main() -> Result<()> {
 
     let ifile: Box<dyn BufRead> = match opt.input {
         Some(filename) => Box::new(io::BufReader::new(File::open(filename)?)),
-        None => Box::new(io::BufReader::new(io::stdin()))
+        None => Box::new(io::BufReader::new(io::stdin())),
     };
 
     if opt.decode {
