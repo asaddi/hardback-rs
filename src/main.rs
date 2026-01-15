@@ -1,3 +1,4 @@
+use std::iter::FromIterator;
 use std::path::PathBuf;
 use std::collections::HashMap;
 use std::io::{prelude::*, self};
@@ -280,6 +281,17 @@ fn test_encode() {
     assert_eq!(*result, "ojcru3ogitpqdhr8buagg1icg53oswjpmd54gz7pomhrz3tqiu7q8hfx4d======hkxj".as_bytes());
 }
 
+fn strip_ascii_whitespace(data: &[u8]) -> Vec<u8> {
+    let iter = data.iter().filter(|c| !c.is_ascii_whitespace()).copied();
+    Vec::from_iter(iter)
+}
+
+#[test]
+fn test_strip_ascii_whitespace() {
+    let result = strip_ascii_whitespace(b"hello there this is a test");
+    assert_eq!(result, "hellotherethisisatest".as_bytes());
+}
+
 fn decode_crc(data: &[u8]) -> u32 {
     let mut crc = 0u32;
     for val in data.iter().take(3).rev() {
@@ -297,14 +309,18 @@ fn decode(lines: Vec<Vec<u8>>) -> Result<Vec<u8>> {
     for raw_line in lines {
         line_number += 1;
 
-        if raw_line.len() < (ENCODED_BYTES_PER_CHUNK + ENCODED_CRC_LEN) {
+        let stripped_line = strip_ascii_whitespace(&raw_line);
+
+        if stripped_line.len() < (ENCODED_BYTES_PER_CHUNK + ENCODED_CRC_LEN) {
             bail!("line too short at line {}", line_number);
         }
 
-        let (line, enc_crc) = raw_line.split_at(raw_line.len() - ENCODED_CRC_LEN);
+        let (line, enc_crc) = stripped_line.split_at(stripped_line.len() - ENCODED_CRC_LEN);
 
         if line.len() % ENCODED_BYTES_PER_CHUNK != 0 {
-            bail!("invalid line length ({}) at line {}", raw_line.len(), line_number);
+            // FIXME Should we report the real line length instead of the
+            // stripped length?
+            bail!("invalid line length ({}) at line {}", stripped_line.len(), line_number);
         }
 
         let decoded_line = raw_decode(line)
@@ -330,6 +346,13 @@ fn decode(lines: Vec<Vec<u8>>) -> Result<Vec<u8>> {
 #[test]
 fn test_decode() {
     let input = vec!["ojcru3ogitpqdhr8buagg1icg53oswjpmd54gz7pomhrz3tqiu7q8hfx4d======hkxj".as_bytes().to_vec()];
+    let result = decode(input).unwrap();
+    assert_eq!(result, "0123456789abcdefghijklmnopqrstuvwxyz".as_bytes());
+}
+
+#[test]
+fn test_decode_whitespace() {
+    let input = vec!["ojcru3og itpqdhr8 buagg1ic g53oswjp md54gz7p omhrz3tq iu7q8hfx 4d======hkxj".as_bytes().to_vec()];
     let result = decode(input).unwrap();
     assert_eq!(result, "0123456789abcdefghijklmnopqrstuvwxyz".as_bytes());
 }
