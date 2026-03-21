@@ -5,13 +5,12 @@ use std::io::{self, prelude::*};
 use std::iter::FromIterator;
 use std::path::PathBuf;
 
-use anyhow::{Context, Error, Result};
 use clap::Parser;
 use once_cell::sync::Lazy;
 use sha2::{Digest, Sha256};
+use snafu::prelude::*;
 
-#[macro_use]
-extern crate anyhow;
+type Result<T, E = snafu::Whatever> = std::result::Result<T, E>;
 
 const ALPHA: &[u8] = b"ybndrfg8ejkmcpqxot1uwisza345h769";
 const PAD_CHAR: u8 = b'=';
@@ -101,7 +100,7 @@ fn strip_padding(s: &[u8]) -> Result<(Vec<u8>, usize)> {
             3 => 2,
             2 => 2,
             1 => 1,
-            _ => bail!("invalid chunk length"),
+            _ => whatever!("invalid chunk length"),
         };
         return Ok((s.to_vec(), raw_count));
     }
@@ -118,7 +117,7 @@ fn strip_padding(s: &[u8]) -> Result<(Vec<u8>, usize)> {
         Some(4) => (3, 5),
         Some(3) => (2, 4),
         Some(1) => (1, 2),
-        _ => bail!("invalid padding"),
+        _ => whatever!("invalid padding"),
     };
 
     let mut out = Vec::new();
@@ -198,7 +197,7 @@ fn raw_decode(s: &[u8]) -> Result<Vec<u8>> {
         for c in padded.iter().rev() {
             let decoded = match DE_ALPHA.get(c) {
                 Some(d) => *d,
-                None => bail!("invalid character '{}'", String::from_utf8_lossy(&[*c])), // Wew!
+                None => whatever!("invalid character '{}'", String::from_utf8_lossy(&[*c])), // Wew!
             };
             val <<= 5;
             val |= decoded as u64;
@@ -328,7 +327,7 @@ fn decode(lines: Vec<Vec<u8>>) -> Result<Vec<u8>> {
         let stripped_line = strip_ascii_whitespace(&raw_line);
 
         if stripped_line.len() < (ENCODED_BYTES_PER_CHUNK + ENCODED_CRC_LEN) {
-            bail!("line too short at line {}", line_number);
+            whatever!("line too short at line {}", line_number);
         }
 
         let (line, enc_crc) = stripped_line.split_at(stripped_line.len() - ENCODED_CRC_LEN);
@@ -336,23 +335,23 @@ fn decode(lines: Vec<Vec<u8>>) -> Result<Vec<u8>> {
         if line.len() % ENCODED_BYTES_PER_CHUNK != 0 {
             // FIXME Should we report the real line length instead of the
             // stripped length?
-            bail!(
+            whatever!(
                 "invalid line length ({}) at line {}",
                 stripped_line.len(),
                 line_number
             );
         }
 
-        let decoded_line =
-            raw_decode(line).with_context(|| format!("decode error at line {line_number}"))?;
-        let decoded_crc =
-            raw_decode(enc_crc).with_context(|| format!("decode error at line {line_number}"))?;
+        let decoded_line = raw_decode(line)
+            .with_whatever_context(|_| format!("decode error at line {line_number}"))?;
+        let decoded_crc = raw_decode(enc_crc)
+            .with_whatever_context(|_| format!("decode error at line {line_number}"))?;
 
         crc = crc_update(&decoded_line[..], crc);
 
         let dec_crc = decode_crc(&decoded_crc[..]);
         if crc != dec_crc {
-            bail!("CRC error at line {}", line_number);
+            whatever!("CRC error at line {}", line_number);
         }
 
         out.extend(&decoded_line);
@@ -388,6 +387,26 @@ fn test_decode_whitespace() {
 }
 
 #[test]
+fn test_decode_error() {
+    // Note: Mutated 5th character u --> p. CRC should be bad.
+    let input = vec![
+        "ojcrp3ogitpqdhr8buagg1icg53oswjpmd54gz7pomhrz3tqiu7q8hfx4d======hkxj"
+            .as_bytes()
+            .to_vec(),
+    ];
+    // TODO Create custom error types?
+    assert!(decode(input).is_err());
+
+    // Note: Mutated 5th character u --> U. Invalid character.
+    let input = vec![
+        "ojcrU3ogitpqdhr8buagg1icg53oswjpmd54gz7pomhrz3tqiu7q8hfx4d======hkxj"
+            .as_bytes()
+            .to_vec(),
+    ];
+    assert!(decode(input).is_err());
+}
+
+#[test]
 fn test_encode_decode() {
     let text = b"Hello there.\nGeneral Kenobi..\nYou are a bold one.\n";
     assert_eq!(text.len(), 50); // Otherwise our assumptions break
@@ -407,7 +426,10 @@ fn test_encode_decode() {
 
 fn create_output(filename: &Option<PathBuf>) -> Result<Box<dyn Write>> {
     match filename {
-        Some(filename) => Ok(Box::new(io::BufWriter::new(File::create(filename)?))),
+        Some(filename) => Ok(Box::new(io::BufWriter::new(
+            File::create(filename)
+                .with_whatever_context(|_| format!("{filename:?}: error creating file"))?,
+        ))),
         None => Ok(Box::new(io::stdout())),
     }
 }
@@ -418,27 +440,34 @@ where
 {
     // TODO Do this better
     let mut buf = Vec::new();
-    let length = ifile.read_to_end(&mut buf)?;
+    let length = ifile
+        .read_to_end(&mut buf)
+        .whatever_context("error reading input")?;
 
     let encoded_lines = encode(&buf[..], 80);
 
     let mut ofile = create_output(output)?;
     for line in encoded_lines {
-        ofile.write_all(&line[..])?;
-        ofile.write_all(b"\n")?;
+        ofile
+            .write_all(&line[..])
+            .whatever_context("error writing output")?;
+        ofile
+            .write_all(b"\n")
+            .whatever_context("error writing output")?;
     }
 
     let mut hasher = Sha256::default();
     hasher.update(&buf[..]);
     let hash = hasher.finalize();
 
-    writeln!(ofile, "# length: {length}")?;
-    writeln!(ofile, "# sha256: {hash:x}")?;
+    writeln!(ofile, "# length: {length}").whatever_context("error writing output")?;
+    writeln!(ofile, "# sha256: {hash:x}").whatever_context("error writing output")?;
     writeln!(
         ofile,
         "# alphabet: {}, CRC-20 poly: 0x1c4047, check: 0xa5448",
         String::from_utf8_lossy(ALPHA)
-    )?;
+    )
+    .whatever_context("error writing output")?;
 
     // Also write out to stderr
     eprintln!("# length: {length}");
@@ -453,10 +482,8 @@ where
 {
     let mut lines = Vec::new();
     for line in ifile.lines() {
-        let line = match line {
-            Ok(line) => line.trim().as_bytes().to_vec(),
-            Err(err) => return Err(Error::new(err)),
-        };
+        let line = whatever!(line, "error reading input");
+        let line = line.trim().as_bytes().to_vec();
 
         if line.is_empty() || line.starts_with(b"#") {
             continue;
@@ -471,7 +498,9 @@ where
     hasher.update(&decoded);
 
     let mut ofile = create_output(output)?;
-    ofile.write_all(&decoded[..])?;
+    ofile
+        .write_all(&decoded[..])
+        .whatever_context("error writing output")?;
 
     eprintln!("# length: {}", decoded.len());
     eprintln!("# sha256: {:x}", hasher.finalize());
@@ -493,11 +522,15 @@ struct Opt {
     input: Option<PathBuf>,
 }
 
+#[snafu::report]
 fn main() -> Result<()> {
     let opt = Opt::parse();
 
     let ifile: Box<dyn BufRead> = match opt.input {
-        Some(filename) => Box::new(io::BufReader::new(File::open(filename)?)),
+        Some(filename) => Box::new(io::BufReader::new(
+            File::open(&filename)
+                .with_whatever_context(|_| format!("{filename:?}: error open file"))?,
+        )),
         None => Box::new(io::BufReader::new(io::stdin())),
     };
 
