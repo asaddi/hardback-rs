@@ -4,9 +4,9 @@ use std::fs::File;
 use std::io::{self, prelude::*};
 use std::iter::FromIterator;
 use std::path::PathBuf;
+use std::sync::LazyLock;
 
 use clap::Parser;
-use once_cell::sync::Lazy;
 use sha2::{Digest, Sha256};
 use snafu::prelude::*;
 
@@ -17,7 +17,7 @@ const PAD_CHAR: u8 = b'=';
 const RAW_BYTES_PER_CHUNK: usize = 5; // aka 40 bits aka least common multiple of 5 bits & 8 bits
 const ENCODED_BYTES_PER_CHUNK: usize = 8;
 
-static DE_ALPHA: Lazy<HashMap<u8, u8>> = Lazy::new(|| {
+static DE_ALPHA: LazyLock<HashMap<u8, u8>> = LazyLock::new(|| {
     let mut decode_table = HashMap::new();
     for (index, c) in ALPHA.iter().enumerate() {
         decode_table.insert(*c, index as u8);

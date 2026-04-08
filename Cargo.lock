@@ -154,10 +154,9 @@ dependencies = [
 
 [[package]]
 name = "hardback"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "clap",
- "once_cell",
  "sha2",
  "snafu",
 ]
@@ -179,12 +178,6 @@ name = "libc"
 version = "0.2.183"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b5b646652bf6661599e1da8901b3b9522896f01e736bad5f723fe7a3a27f899d"
-
-[[package]]
-name = "once_cell"
-version = "1.21.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
 
 [[package]]
 name = "once_cell_polyfill"
