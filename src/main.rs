@@ -1,8 +1,9 @@
+#![warn(clippy::pedantic)]
+
 use std::boxed::Box;
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{self, prelude::*};
-use std::iter::FromIterator;
 use std::path::PathBuf;
 use std::sync::LazyLock;
 
@@ -20,7 +21,7 @@ const ENCODED_BYTES_PER_CHUNK: usize = 8;
 static DE_ALPHA: LazyLock<HashMap<u8, u8>> = LazyLock::new(|| {
     let mut decode_table = HashMap::new();
     for (index, c) in ALPHA.iter().enumerate() {
-        decode_table.insert(*c, index as u8);
+        decode_table.insert(*c, u8::try_from(index).unwrap());
     }
     decode_table
 });
@@ -50,7 +51,7 @@ fn raw_encode(s: &[u8]) -> Vec<u8> {
         let mut val: u64 = 0;
         for c in padded.iter().rev() {
             val <<= 8;
-            val |= *c as u64;
+            val |= u64::from(*c);
         }
 
         let pad_start = match ins.len() {
@@ -94,11 +95,9 @@ fn strip_padding(s: &[u8]) -> Result<(Vec<u8>, usize)> {
             // Note these are ceil(len * 5 / 8)
             // So lengths like 4 encoded will yield 3 bytes/24 bits (20 bits in actuality)
             7 => 5,
-            6 => 4,
-            5 => 4,
+            6 | 5 => 4,
             4 => 3,
-            3 => 2,
-            2 => 2,
+            3 | 2 => 2,
             1 => 1,
             _ => whatever!("invalid chunk length"),
         };
@@ -200,7 +199,7 @@ fn raw_decode(s: &[u8]) -> Result<Vec<u8>> {
                 None => whatever!("invalid character '{}'", String::from_utf8_lossy(&[*c])), // Wew!
             };
             val <<= 5;
-            val |= decoded as u64;
+            val |= u64::from(decoded);
         }
 
         for _ in 0..raw_count {
@@ -228,11 +227,9 @@ fn test_raw_decode() {
 fn crc_update(data: &[u8], crc: u32) -> u32 {
     let mut crc = crc;
     for c in data {
-        for i in [
+        for i in &[
             0x80u8, 0x40u8, 0x20u8, 0x10u8, 0x08u8, 0x04u8, 0x02u8, 0x01u8,
-        ]
-        .iter()
-        {
+        ] {
             let mut bit = (crc & 0x80000) != 0; // The bit about to be shifted out
             if (c & i) != 0 {
                 bit = !bit;
@@ -298,7 +295,7 @@ fn test_encode() {
 
 fn strip_ascii_whitespace(data: &[u8]) -> Vec<u8> {
     let iter = data.iter().filter(|c| !c.is_ascii_whitespace()).copied();
-    Vec::from_iter(iter)
+    iter.collect::<Vec<_>>()
 }
 
 #[test]
@@ -311,7 +308,7 @@ fn decode_crc(data: &[u8]) -> u32 {
     let mut crc = 0u32;
     for val in data.iter().take(3).rev() {
         crc <<= 8;
-        crc |= *val as u32;
+        crc |= u32::from(*val);
     }
     crc
 }
@@ -424,17 +421,18 @@ fn test_encode_decode() {
     }
 }
 
-fn create_output(filename: &Option<PathBuf>) -> Result<Box<dyn Write>> {
+fn create_output(filename: Option<&PathBuf>) -> Result<Box<dyn Write>> {
     match filename {
         Some(filename) => Ok(Box::new(io::BufWriter::new(
-            File::create(filename)
-                .with_whatever_context(|_| format!("{filename:?}: error creating file"))?,
+            File::create(filename).with_whatever_context(|_| {
+                format!("{}: error creating file", filename.display())
+            })?,
         ))),
         None => Ok(Box::new(io::stdout())),
     }
 }
 
-fn encode_main<R>(mut ifile: R, output: &Option<PathBuf>) -> Result<()>
+fn encode_main<R>(mut ifile: R, output: Option<&PathBuf>) -> Result<()>
 where
     R: Read,
 {
@@ -476,7 +474,7 @@ where
     Ok(())
 }
 
-fn decode_main<R>(ifile: R, output: &Option<PathBuf>) -> Result<()>
+fn decode_main<R>(ifile: R, output: Option<&PathBuf>) -> Result<()>
 where
     R: BufRead,
 {
@@ -529,14 +527,14 @@ fn main() -> Result<()> {
     let ifile: Box<dyn BufRead> = match opt.input {
         Some(filename) => Box::new(io::BufReader::new(
             File::open(&filename)
-                .with_whatever_context(|_| format!("{filename:?}: error open file"))?,
+                .with_whatever_context(|_| format!("{}: error open file", filename.display()))?,
         )),
         None => Box::new(io::BufReader::new(io::stdin())),
     };
 
     if opt.decode {
-        decode_main(ifile, &opt.output)
+        decode_main(ifile, opt.output.as_ref())
     } else {
-        encode_main(ifile, &opt.output)
+        encode_main(ifile, opt.output.as_ref())
     }
 }
